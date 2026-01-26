@@ -18,31 +18,40 @@
         border-radius: 6px; font-size: 14px; z-index: 9999; transition: .3s; 
     }
     .savebtn:hover { background: rgba(70,70,70,.95); border-color: #fff; }
-    .hidden { opacity: 0; pointer-events: none; }
     #dl-btn { right: 12px; }
     #up-btn { right: 120px; }
+    
+    /* Progress Overlay */
+    #import-overlay {
+        display: none; position: fixed; top:0; left:0; width:100%; height:100%;
+        background: rgba(0,0,0,0.9); z-index: 10000; flex-direction: column;
+        justify-content: center; align-items: center; color: white;
+    }
+    #progress-container { width: 300px; height: 20px; background: #333; border-radius: 10px; margin-top: 20px; overflow: hidden; }
+    #progress-bar { width: 0%; height: 100%; background: #fff; transition: width 0.2s; }
 </style>
 </head>
 <body>
 
 <div id="loading-text">Loading...</div>
-<div id="unity-mobile-warning">WebGL not supported on mobile</div>
+<div id="import-overlay">
+    <h2 id="status-msg">Wiping & Injecting Save...</h2>
+    <div id="progress-container"><div id="progress-bar"></div></div>
+</div>
 <canvas id="unity-canvas"></canvas>
 <div id="fps-graph" style="display:none"><canvas id="fps-canvas"></canvas></div>
 
 <input type="file" id="save-upload-input" style="display:none" accept=".dat">
 
 <script>
-const lt=document.getElementById("loading-text"),cv=document.getElementById("unity-canvas"),mw=document.getElementById("unity-mobile-warning"),fg=document.getElementById("fps-graph"),fc=document.getElementById("fps-canvas");
-let lb=0,hd=false,tm_id,sb,ub;
+const lt=document.getElementById("loading-text"),cv=document.getElementById("unity-canvas"),fg=document.getElementById("fps-graph"),fc=document.getElementById("fps-canvas");
+const overlay=document.getElementById("import-overlay"),pBar=document.getElementById("progress-bar"),sMsg=document.getElementById("status-msg");
+let lb=0,sb,ub;
 const tm='912.81',fh=[],ml=90;fc.width=180;fc.height=50;
 const ctx=fc.getContext('2d');
 let lft=performance.now(),fr=0,fps=60;
 
 function uf(){const nt=performance.now(),dt=(nt-lft)/1000;lft=nt;fps=dt>0?1/dt:60;fr++;if(fr%3===0){fh.push(fps);if(fh.length>ml)fh.shift();ctx.clearRect(0,0,180,50);for(let i=0;i<fh.length;i++){const f=fh[i],h=Math.min(f/60,1)*35,c=f>50?'#0f0':f>30?'#fa0':'#f33';ctx.fillStyle=c;ctx.fillRect(i*2,50-h,1.8,h);}ctx.fillStyle='#fff';ctx.font='bold 13px monospace';ctx.shadowColor='#000';ctx.shadowBlur=4;ctx.fillText(Math.round(fps)+' FPS',6,16);ctx.shadowBlur=0;}requestAnimationFrame(uf);}
-function shw(){hd=false;fg.classList.remove('hidden');if(sb)sb.classList.remove('hidden');if(ub)ub.classList.remove('hidden');}
-function rst(){clearTimeout(tm_id);if(!hd){hd=true;fg.classList.add('hidden');if(sb)sb.classList.add('hidden');if(ub)ub.classList.add('hidden');}tm_id=setTimeout(shw,5000);}
-document.addEventListener('keydown',rst);
 
 async function fwp(u){const r=await fetch(u),rd=r.body.getReader(),ch=[];while(true){const{done,value}=await rd.read();if(done)break;lb+=value.length;ch.push(value);lt.textContent=`${(lb/1048576).toFixed(2)} MB / ${tm} MB`;}return URL.createObjectURL(new Blob(ch));}
 async function mf(p){const b=await Promise.all(p.map(fwp)),bl=await Promise.all(b.map(u=>fetch(u).then(r=>r.blob())));return URL.createObjectURL(new Blob(bl));}
@@ -95,39 +104,53 @@ async function sdl(){
 }
 
 async function importAndWipe(file) {
+    overlay.style.display = 'flex';
+    pBar.style.width = '10%';
+    sMsg.textContent = "Opening Database...";
+
     try {
         const db = await odb('/idbfs');
-        const reader = new FileReader();
-        
-        reader.onload = async (e) => {
-            const uint8 = new Uint8Array(e.target.result);
+        pBar.style.width = '30%';
+        sMsg.textContent = "Clearing Old Saves...";
+
+        // Wrap the whole process in a promise to ensure completion
+        await new Promise((resolve, reject) => {
             const tx = db.transaction(['FILE_DATA'], 'readwrite');
             const store = tx.objectStore('FILE_DATA');
 
-            store.clear();
+            store.clear(); // Clear all files
+            
+            pBar.style.width = '50%';
+            sMsg.textContent = `Injecting ${Math.round(file.size/1024)}KB Save Data...`;
 
-            const pathsToOverwrite = [
+            const paths = [
                 "/idbfs/5e2f56f765046361c30ed2eb418c6b95/user1.dat",
                 "/idbfs/5e2f56f765046361c30ed2eb418c6b95/user1_1.5.78.11833.dat",
                 "/idbfs/8de9b686b1aa985d5128d2174ab1bc9f/user1.dat",
                 "/idbfs/8de9b686b1aa985d5128d2174ab1bc9f/user1_1.5.78.11833.dat"
             ];
 
-            const fileObject = { contents: uint8, timestamp: new Date() };
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const uint8 = new Uint8Array(e.target.result);
+                const fileObject = { contents: uint8, timestamp: new Date() };
 
-            pathsToOverwrite.forEach(path => {
-                store.put(fileObject, path);
-            });
-
-            tx.oncomplete = () => {
-                console.log("Wipe and Import Complete.");
-                alert("Saves wiped and new file imported. Reloading now...");
-                setTimeout(() => location.reload(), 500);
+                paths.forEach(p => store.put(fileObject, p));
+                
+                tx.oncomplete = () => {
+                    pBar.style.width = '100%';
+                    sMsg.textContent = "Verified! Reloading...";
+                    setTimeout(resolve, 1000);
+                };
             };
-        };
-        reader.readAsArrayBuffer(file);
+            reader.onerror = reject;
+            reader.readAsArrayBuffer(file);
+        });
+
+        location.reload();
     } catch (err) {
-        alert("Operation failed. Ensure the game has loaded once.");
+        alert("Critical Error: " + err.message);
+        overlay.style.display = 'none';
     }
 }
 </script>
