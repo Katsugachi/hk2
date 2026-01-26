@@ -26,14 +26,14 @@
         justify-content: center; align-items: center; color: white;
     }
     #progress-container { width: 300px; height: 20px; background: #333; border-radius: 10px; margin-top: 20px; overflow: hidden; }
-    #progress-bar { width: 0%; height: 100%; background: #00ffcc; transition: width 0.3s; }
+    #progress-bar { width: 0%; height: 100%; background: #00ccff; transition: width 0.3s; }
 </style>
 </head>
 <body>
 
 <div id="loading-text">Loading...</div>
 <div id="import-overlay">
-    <h2 id="status-msg">Preparing...</h2>
+    <h2 id="status-msg">Analyzing Storage...</h2>
     <div id="progress-container"><div id="progress-bar"></div></div>
 </div>
 <canvas id="unity-canvas"></canvas>
@@ -104,47 +104,53 @@ async function sdl(){
 async function importAndWipe(file) {
     overlay.style.display = 'flex';
     pBar.style.width = '10%';
-    sMsg.textContent = "Reading Local File...";
-
-    // Step 1: Read the file first (prevents the 50% hang)
-    const fileData = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(new Uint8Array(e.target.result));
-        reader.onerror = () => reject(new Error("Could not read local file."));
-        reader.readAsArrayBuffer(file);
-    });
-
-    pBar.style.width = '40%';
-    sMsg.textContent = "Connecting to Game Database...";
+    sMsg.textContent = "Reading File...";
 
     try {
+        const fileData = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(new Uint8Array(e.target.result));
+            reader.onerror = reject;
+            reader.readAsArrayBuffer(file);
+        });
+
         const db = await odb('/idbfs');
-        const paths = [
-            "/idbfs/5e2f56f765046361c30ed2eb418c6b95/user1.dat",
-            "/idbfs/5e2f56f765046361c30ed2eb418c6b95/user1_1.5.78.11833.dat",
-            "/idbfs/8de9b686b1aa985d5128d2174ab1bc9f/user1.dat",
-            "/idbfs/8de9b686b1aa985d5128d2174ab1bc9f/user1_1.5.78.11833.dat"
-        ];
+        pBar.style.width = '30%';
+        sMsg.textContent = "Scanning Storage Paths...";
+
+        // Step 1: Find all current save paths in the DB
+        const existingPaths = await new Promise((resolve) => {
+            const tx = db.transaction(['FILE_DATA'], 'readonly');
+            const store = tx.objectStore('FILE_DATA');
+            const req = store.getAllKeys();
+            req.onsuccess = () => resolve(req.result.filter(k => k.includes('user1')));
+        });
+
+        if (existingPaths.length === 0) {
+            throw new Error("No existing save slots found. Please start a 'New Game' in the browser first to create the folders.");
+        }
 
         pBar.style.width = '60%';
-        sMsg.textContent = "Wiping & Writing Save...";
+        sMsg.textContent = `Injecting into ${existingPaths.length} locations...`;
 
+        // Step 2: Inject data into every path we found
         await new Promise((resolve, reject) => {
             const tx = db.transaction(['FILE_DATA'], 'readwrite');
             const store = tx.objectStore('FILE_DATA');
             
-            store.clear(); // Wipe
-            
             const fileObject = { contents: fileData, timestamp: new Date() };
-            paths.forEach(p => store.put(fileObject, p));
+            
+            existingPaths.forEach(path => {
+                store.put(fileObject, path);
+            });
 
             tx.oncomplete = resolve;
-            tx.onerror = () => reject(new Error("Database write failed."));
+            tx.onerror = reject;
         });
 
         pBar.style.width = '100%';
-        sMsg.textContent = "Success! Reloading...";
-        setTimeout(() => location.reload(), 1200);
+        sMsg.textContent = "Injection Successful! Reloading...";
+        setTimeout(() => location.reload(), 1000);
 
     } catch (err) {
         alert("Error: " + err.message);
