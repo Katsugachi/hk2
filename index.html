@@ -9,7 +9,6 @@
     body { background: #000; overflow: hidden; font-family: Arial, sans-serif; }
     #loading-text { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-size: 24px; }
     #unity-canvas { width: 100vw; height: 100vh; display: block; }
-    #unity-mobile-warning { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #fff; background: rgba(0,0,0,.9); padding: 20px; border-radius: 8px; font-size: 14px; }
     #fps-graph { position: fixed; top: 12px; left: 12px; width: 200px; height: 70px; background: rgba(0,0,0,.8); border-radius: 6px; padding: 10px; z-index: 9999; transition: .3s; }
     #fps-canvas { width: 100%; height: 100%; display: block; }
     .savebtn { 
@@ -21,21 +20,20 @@
     #dl-btn { right: 12px; }
     #up-btn { right: 120px; }
     
-    /* Progress Overlay */
     #import-overlay {
         display: none; position: fixed; top:0; left:0; width:100%; height:100%;
         background: rgba(0,0,0,0.9); z-index: 10000; flex-direction: column;
         justify-content: center; align-items: center; color: white;
     }
     #progress-container { width: 300px; height: 20px; background: #333; border-radius: 10px; margin-top: 20px; overflow: hidden; }
-    #progress-bar { width: 0%; height: 100%; background: #fff; transition: width 0.2s; }
+    #progress-bar { width: 0%; height: 100%; background: #00ffcc; transition: width 0.3s; }
 </style>
 </head>
 <body>
 
 <div id="loading-text">Loading...</div>
 <div id="import-overlay">
-    <h2 id="status-msg">Wiping & Injecting Save...</h2>
+    <h2 id="status-msg">Preparing...</h2>
     <div id="progress-container"><div id="progress-bar"></div></div>
 </div>
 <canvas id="unity-canvas"></canvas>
@@ -106,50 +104,50 @@ async function sdl(){
 async function importAndWipe(file) {
     overlay.style.display = 'flex';
     pBar.style.width = '10%';
-    sMsg.textContent = "Opening Database...";
+    sMsg.textContent = "Reading Local File...";
+
+    // Step 1: Read the file first (prevents the 50% hang)
+    const fileData = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(new Uint8Array(e.target.result));
+        reader.onerror = () => reject(new Error("Could not read local file."));
+        reader.readAsArrayBuffer(file);
+    });
+
+    pBar.style.width = '40%';
+    sMsg.textContent = "Connecting to Game Database...";
 
     try {
         const db = await odb('/idbfs');
-        pBar.style.width = '30%';
-        sMsg.textContent = "Clearing Old Saves...";
+        const paths = [
+            "/idbfs/5e2f56f765046361c30ed2eb418c6b95/user1.dat",
+            "/idbfs/5e2f56f765046361c30ed2eb418c6b95/user1_1.5.78.11833.dat",
+            "/idbfs/8de9b686b1aa985d5128d2174ab1bc9f/user1.dat",
+            "/idbfs/8de9b686b1aa985d5128d2174ab1bc9f/user1_1.5.78.11833.dat"
+        ];
 
-        // Wrap the whole process in a promise to ensure completion
+        pBar.style.width = '60%';
+        sMsg.textContent = "Wiping & Writing Save...";
+
         await new Promise((resolve, reject) => {
             const tx = db.transaction(['FILE_DATA'], 'readwrite');
             const store = tx.objectStore('FILE_DATA');
-
-            store.clear(); // Clear all files
             
-            pBar.style.width = '50%';
-            sMsg.textContent = `Injecting ${Math.round(file.size/1024)}KB Save Data...`;
+            store.clear(); // Wipe
+            
+            const fileObject = { contents: fileData, timestamp: new Date() };
+            paths.forEach(p => store.put(fileObject, p));
 
-            const paths = [
-                "/idbfs/5e2f56f765046361c30ed2eb418c6b95/user1.dat",
-                "/idbfs/5e2f56f765046361c30ed2eb418c6b95/user1_1.5.78.11833.dat",
-                "/idbfs/8de9b686b1aa985d5128d2174ab1bc9f/user1.dat",
-                "/idbfs/8de9b686b1aa985d5128d2174ab1bc9f/user1_1.5.78.11833.dat"
-            ];
-
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                const uint8 = new Uint8Array(e.target.result);
-                const fileObject = { contents: uint8, timestamp: new Date() };
-
-                paths.forEach(p => store.put(fileObject, p));
-                
-                tx.oncomplete = () => {
-                    pBar.style.width = '100%';
-                    sMsg.textContent = "Verified! Reloading...";
-                    setTimeout(resolve, 1000);
-                };
-            };
-            reader.onerror = reject;
-            reader.readAsArrayBuffer(file);
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(new Error("Database write failed."));
         });
 
-        location.reload();
+        pBar.style.width = '100%';
+        sMsg.textContent = "Success! Reloading...";
+        setTimeout(() => location.reload(), 1200);
+
     } catch (err) {
-        alert("Critical Error: " + err.message);
+        alert("Error: " + err.message);
         overlay.style.display = 'none';
     }
 }
